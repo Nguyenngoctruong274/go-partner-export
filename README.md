@@ -85,7 +85,7 @@ curl localhost:8080/healthz   # {"status":"ok"}
 curl localhost:8080/readyz    # {"status":"ready"}; 503 if PostgreSQL is down or while shutting down
 make test        # unit tests with the race detector
 make test-db     # unit tests + tests against the real PostgreSQL and the GCS emulator
-make stack       # exportd and its dependencies together in Docker
+make stack       # exportd, its dependencies and Prometheus (:9090) together in Docker
 ```
 
 exportd applies pending migrations at startup, under an advisory lock so

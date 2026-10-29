@@ -1,6 +1,7 @@
 # `docker compose up -d` starts the dependencies only: PostgreSQL, an SFTP
 # server standing in for the partner, and a GCS emulator.
-# `docker compose --profile stack up --build` also runs exportd.
+# `docker compose --profile stack up --build` also runs exportd and a
+# Prometheus loaded with the alert rules from deploy/prometheus.
 # Credentials here are for local use only.
 services:
   postgres:
@@ -45,6 +46,8 @@ services:
       PX_SHUTDOWN_DRAIN: 2s
       PX_BLOB_DRIVER: fs
       PX_BLOB_FS_ROOT: /tmp/blob
+      PX_PUBLIC_URL: http://localhost:8080
+      PX_FS_SIGNING_SECRET: local-only-signing-secret-32bytes!
       PX_SFTP_HOST: sftp
       PX_SFTP_PORT: "22"
       PX_SFTP_USER: partner
@@ -60,6 +63,16 @@ services:
         condition: service_healthy
       sftp:
         condition: service_started
+
+  prometheus:
+    profiles: ["stack"]
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - exportd
 
 volumes:
   pgdata:
