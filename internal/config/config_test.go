@@ -88,6 +88,7 @@ func TestLoadOverrides(t *testing.T) {
 		"PX_BLOB_DRIVER":          "gcs",
 		"PX_BLOB_BUCKET":          "acme-fin-prod",
 		"PX_BLOB_PREFIX":          "partner-report-daily",
+		"PX_GCS_ENDPOINT":         "http://localhost:4443",
 		"PX_GCS_CREDENTIALS_FILE": "/var/run/secrets/gcs/client.json",
 		"PX_GCS_SIGNER_KEY_FILE":  "/var/run/secrets/gcs/signer.json",
 		"PX_SIGNED_URL_TTL":       "72h",
@@ -128,6 +129,7 @@ func TestLoadOverrides(t *testing.T) {
 			Bucket:             "acme-fin-prod",
 			Prefix:             "partner-report-daily",
 			FSRoot:             "./data/blob",
+			GCSEndpoint:        "http://localhost:4443",
 			GCSCredentialsFile: "/var/run/secrets/gcs/client.json",
 			GCSSignerKeyFile:   "/var/run/secrets/gcs/signer.json",
 			SignedURLTTL:       72 * time.Hour,
@@ -245,6 +247,11 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			name: "unknown blob driver and absolute prefix",
 			env:  with("PX_BLOB_DRIVER", "s3", "PX_BLOB_PREFIX", "/exports"),
 			want: []string{`PX_BLOB_DRIVER: must be "fs" or "gcs"`, "PX_BLOB_PREFIX: must be a relative path"},
+		},
+		{
+			name: "gcs endpoint must be a URL",
+			env:  with("PX_GCS_ENDPOINT", "localhost:4443"),
+			want: []string{"PX_GCS_ENDPOINT: must be an http(s) URL"},
 		},
 		{
 			name: "signed url ttl beyond the GCS limit",

@@ -28,11 +28,16 @@ jobs:
           --health-retries 10
     env:
       PX_TEST_DATABASE_URL: postgres://partner:partner@localhost:5432/partner_test?sslmode=disable
+      PX_TEST_GCS_ENDPOINT: http://localhost:4443
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Start GCS emulator
+        run: |
+          docker run -d --name gcs -p 4443:4443 fsouza/fake-gcs-server:1.52.2 -scheme http -port 4443 -public-host localhost:4443
+          for i in $(seq 1 20); do curl -fsS localhost:4443/storage/v1/b >/dev/null && break; sleep 1; done
       - name: Vet
         run: go vet ./...
       - name: Test (unit + PostgreSQL)

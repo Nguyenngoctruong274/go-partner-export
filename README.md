@@ -68,7 +68,8 @@ built so far.
 | `internal/export` | Report day and window in a zone, next run time, file naming and parsing, CSV writing and reading (no I/O) |
 | `internal/postgres` | Connection pool, embedded migrations under an advisory lock, `trips` upserts and window queries, `export_runs` history |
 | `internal/testdb` | Isolated PostgreSQL schema per test (`PX_TEST_DATABASE_URL`) |
-| `internal/blob` *(days 4–5)* | `Store` interface; `fs` and `gcs` drivers; V4 signed URLs |
+| `internal/blob` | `Store` interface; `fs` driver (temp file + rename) and `gcs` driver over the JSON API; later V4 signed URLs |
+| `internal/retry` | Bounded retries with exponential backoff, jitter, permanent and temporary errors |
 | `internal/sftp` *(day 6)* | SSH/SFTP client: key or password auth, pinned host keys, atomic upload |
 | `internal/pipeline` *(day 7)* | Orchestration, retries, run state machine |
 
@@ -80,7 +81,7 @@ make run         # exportd on :8080 with the local defaults from the Makefile
 curl localhost:8080/healthz   # {"status":"ok"}
 curl localhost:8080/readyz    # {"status":"ready"}; 503 if PostgreSQL is down or while shutting down
 make test        # unit tests with the race detector
-make test-db     # unit tests + tests against the real PostgreSQL
+make test-db     # unit tests + tests against the real PostgreSQL and the GCS emulator
 make stack       # exportd and its dependencies together in Docker
 ```
 
@@ -134,6 +135,7 @@ Files are named `<prefix>_<version>_<YYYYMMDD>_<seq>.csv`, for example
 | `PX_BLOB_PREFIX` | `partner-export` | Folder inside the bucket or directory |
 | `PX_BLOB_FS_ROOT` | `./data/blob` | Directory used by the `fs` driver |
 | `PX_BLOB_BUCKET` | *required for gcs* | GCS bucket, e.g. `acme-fin-prod` |
+| `PX_GCS_ENDPOINT` | `https://storage.googleapis.com` | API base URL; point it at an emulator such as fake-gcs-server locally |
 | `PX_GCS_CREDENTIALS_FILE` | *(ADC)* | Optional service-account JSON for the storage client. Empty uses Application Default Credentials: Workload Identity on GKE, `GOOGLE_APPLICATION_CREDENTIALS`, or `gcloud auth application-default login` |
 | `PX_GCS_SIGNER_KEY_FILE` | *required for gcs* | Service-account JSON key whose private key signs download URLs, e.g. `/var/run/secrets/gcs/signer.json` |
 | `PX_SIGNED_URL_TTL` | `168h` | Validity of a download link, 1 minute to 7 days (the GCS maximum) |
@@ -278,7 +280,7 @@ spec:
 - [x] **Day 1**: Scaffold: full configuration with validation, probes, slog, graceful shutdown, Docker, compose with PostgreSQL + SFTP + GCS emulator, CI
 - [x] **Day 2**: Export domain: report window in a zone, file naming with version and sequence, CSV builder (BOM, delimiter, column order), integer money; table tests and fuzzing
 - [x] **Day 3**: Schema and migrations: rows to export and `export_runs`; store with upsert, window query and run upsert by date; isolated test schemas
-- [ ] **Day 4**: Blob store: `Store` interface, `fs` driver, `gcs` driver against the emulator; content types; retries with backoff
+- [x] **Day 4**: Blob store: `Store` interface, `fs` driver, `gcs` driver against the emulator; content types; retries with backoff
 - [ ] **Day 5**: Signed URLs: GCS V4 signing with a service-account key, verified against a fixed key and clock; HMAC-signed links for the `fs` driver
 - [ ] **Day 6**: SFTP client: key and password auth, `known_hosts` pinning, mkdir -p, upload under a temporary name then rename; tests against an in-process SSH/SFTP server
 - [ ] **Day 7**: Pipeline: run state machine, per-stage retries, idempotent re-run of a date; end-to-end test over PostgreSQL, the emulator and the SFTP server

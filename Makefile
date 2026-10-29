@@ -29,8 +29,8 @@ test: ## Run unit tests with the race detector
 	go test -race -count=1 ./...
 
 .PHONY: test-db
-test-db: ## Run all tests, including PostgreSQL ones (needs `make up`)
-	PX_TEST_DATABASE_URL=postgres://partner:partner@localhost:5432/partner_test?sslmode=disable go test -race -count=1 ./...
+test-db: ## Run all tests, including PostgreSQL and GCS-emulator ones (needs `make up`)
+	PX_TEST_DATABASE_URL=postgres://partner:partner@localhost:5432/partner_test?sslmode=disable PX_TEST_GCS_ENDPOINT=http://localhost:4443 go test -race -count=1 ./...
 
 .PHONY: cover
 cover: ## Run tests and print total coverage

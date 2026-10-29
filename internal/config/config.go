@@ -80,6 +80,8 @@ type Blob struct {
 	Prefix string
 	// FSRoot is the directory used by the fs driver.
 	FSRoot string
+	// GCSEndpoint overrides the storage API base URL, for an emulator.
+	GCSEndpoint string
 	// GCSCredentialsFile optionally points at a service-account JSON key for
 	// the storage client. Empty means Application Default Credentials
 	// (Workload Identity, GOOGLE_APPLICATION_CREDENTIALS, gcloud login).
@@ -148,6 +150,7 @@ func load(getenv func(string) string) (Config, error) {
 			Bucket:             getenv("PX_BLOB_BUCKET"),
 			Prefix:             valueOr(getenv("PX_BLOB_PREFIX"), "partner-export"),
 			FSRoot:             valueOr(getenv("PX_BLOB_FS_ROOT"), "./data/blob"),
+			GCSEndpoint:        getenv("PX_GCS_ENDPOINT"),
 			GCSCredentialsFile: getenv("PX_GCS_CREDENTIALS_FILE"),
 			GCSSignerKeyFile:   getenv("PX_GCS_SIGNER_KEY_FILE"),
 			SignedURLTTL:       MaxSignedURLTTL,
@@ -227,6 +230,11 @@ func load(getenv func(string) string) (Config, error) {
 		}
 	default:
 		p.errorf("PX_BLOB_DRIVER: must be %q or %q", BlobDriverFS, BlobDriverGCS)
+	}
+	if raw := cfg.Blob.GCSEndpoint; raw != "" {
+		if u, err := url.Parse(raw); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			p.errorf("PX_GCS_ENDPOINT: must be an http(s) URL")
+		}
 	}
 	if strings.HasPrefix(cfg.Blob.Prefix, "/") || strings.Contains(cfg.Blob.Prefix, "..") {
 		p.errorf("PX_BLOB_PREFIX: must be a relative path without '..'")
