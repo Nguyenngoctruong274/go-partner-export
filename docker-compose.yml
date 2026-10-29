@@ -1,0 +1,65 @@
+# `docker compose up -d` starts the dependencies only: PostgreSQL, an SFTP
+# server standing in for the partner, and a GCS emulator.
+# `docker compose --profile stack up --build` also runs exportd.
+# Credentials here are for local use only.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: partner
+      POSTGRES_PASSWORD: partner
+      POSTGRES_DB: partner
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U partner -d partner"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  # Partner SFTP stand-in. user:password:uid::home-subdir — files land in
+  # /home/partner/input, the same layout partners usually hand over.
+  sftp:
+    image: atmoz/sftp:alpine
+    command: partner:partner:1001::input
+    ports:
+      - "2222:22"
+
+  # GCS emulator for the gcs blob driver (days 4–5). Point the client at it
+  # with STORAGE_EMULATOR_HOST=localhost:4443.
+  gcs:
+    image: fsouza/fake-gcs-server:1.52.2
+    command: -scheme http -port 4443 -public-host localhost:4443
+    ports:
+      - "4443:4443"
+
+  exportd:
+    profiles: ["stack"]
+    build: .
+    environment:
+      PX_DATABASE_URL: postgres://partner:partner@postgres:5432/partner?sslmode=disable
+      PX_LOG_LEVEL: info
+      PX_SHUTDOWN_DRAIN: 2s
+      PX_BLOB_DRIVER: fs
+      PX_BLOB_FS_ROOT: /tmp/blob
+      PX_SFTP_HOST: sftp
+      PX_SFTP_PORT: "22"
+      PX_SFTP_USER: partner
+      PX_SFTP_AUTH: password
+      PX_SFTP_PASSWORD: partner
+      # Local only: the stand-in server has a fresh host key on every start.
+      PX_SFTP_INSECURE_SKIP_HOST_KEY: "true"
+    ports:
+      - "8080:8080"
+    stop_grace_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sftp:
+        condition: service_started
+
+volumes:
+  pgdata:
