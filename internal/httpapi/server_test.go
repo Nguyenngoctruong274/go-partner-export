@@ -120,3 +120,19 @@ func TestUnknownRouteAndMethod(t *testing.T) {
 		t.Errorf("POST /healthz: got %d", rec.Code)
 	}
 }
+
+func TestMetricsRoute(t *testing.T) {
+	h := NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
+		Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("up 1\n")) }),
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "up 1\n" {
+		t.Fatalf("got %d %q", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	newTestHandler(nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("without metrics: %d", rec.Code)
+	}
+}

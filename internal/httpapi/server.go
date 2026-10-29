@@ -24,6 +24,8 @@ type Options struct {
 	Blob *Blob
 	// Exports, when set, serves the run endpoints under /v1/exports.
 	Exports *ExportOptions
+	// Metrics, when set, is served at GET /metrics.
+	Metrics http.Handler
 }
 
 type api struct {
@@ -60,6 +62,9 @@ func NewHandler(logger *slog.Logger, opts Options) *Handler {
 	if opts.Exports != nil && opts.Exports.Exports != nil {
 		a.exports = newExportRunner(logger, *opts.Exports)
 		a.routeExports(mux)
+	}
+	if opts.Metrics != nil {
+		mux.Handle("GET /metrics", opts.Metrics)
 	}
 	return &Handler{Handler: a.withRequestID(a.withAccessLog(mux)), runner: a.exports}
 }

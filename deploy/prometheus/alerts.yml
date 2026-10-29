@@ -1,0 +1,49 @@
+# Alert rules for go-partner-export. Load them into Prometheus with
+#   rule_files: [alerts.yml]
+groups:
+  - name: partner-export
+    rules:
+      # The daily file did not reach the partner. 26h leaves slack for the
+      # schedule, retries and a slow push before anyone is paged.
+      - alert: PartnerExportMissing
+        expr: time() - export_last_success_timestamp_seconds > 26 * 3600
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "No partner export pushed in the last 26 hours"
+          description: "Check GET /v1/exports?state=failed, then re-run the day with POST /v1/exports."
+
+      # exportd restarted and has not pushed yet: the gauge is 0 until the
+      # first success after start. Separate from the alert above so a restart
+      # at 23:00 does not page while the 01:00 run is still ahead.
+      - alert: PartnerExportNeverSucceededSinceStart
+        expr: export_last_success_timestamp_seconds == 0 and (time() - process_start_time_seconds) > 27 * 3600
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "exportd has not pushed a file since it started over 27h ago"
+
+      # A run failed. Warn only: the cron or an operator usually re-runs it.
+      - alert: PartnerExportRunFailed
+        expr: increase(export_runs_total{state="failed"}[1h]) > 0
+        labels: { severity: warn }
+        annotations:
+          summary: "A partner export run failed in the last hour ({{ $value }} runs)"
+          description: "GET /v1/exports?state=failed shows the stage and the error."
+
+      # The push stage keeps failing: the partner's SFTP is down or the
+      # credentials or host key changed.
+      - alert: PartnerSFTPPushFailing
+        expr: increase(export_stage_failures_total{stage="push"}[6h]) >= 3
+        labels: { severity: warn }
+        annotations:
+          summary: "SFTP push failed {{ $value }} times in 6h"
+
+      # The file is empty on a day that normally has rows.
+      - alert: PartnerExportEmpty
+        expr: export_last_run_rows == 0 and export_runs_total{state="pushed"} > 0
+        for: 1h
+        labels: { severity: warn }
+        annotations:
+          summary: "The last partner export had 0 rows"
+          description: "Either no trips ended that day, or the ingestion into the trips table stopped."

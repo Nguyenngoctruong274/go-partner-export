@@ -260,3 +260,37 @@ func TestGCSEscape(t *testing.T) {
 		t.Errorf("escapeKey = %q", got)
 	}
 }
+
+func BenchmarkGCSSignedURL(b *testing.B) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		b.Fatal(err)
+	}
+	der, _ := x509.MarshalPKCS8PrivateKey(key)
+	sa := ServiceAccountKey{ClientEmail: "s@x.iam.gserviceaccount.com", PrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))}
+	s, err := NewGCSSigner(sa, "bucket", "")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := s.SignedURL("partner-export/PartnerAccrual_v1_20261028_001.csv", time.Hour); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkHMACSignedURL(b *testing.B) {
+	s, err := NewHMACSigner("https://export.internal", []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := s.SignedURL("partner-export/PartnerAccrual_v1_20261028_001.csv", time.Hour); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

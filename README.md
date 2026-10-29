@@ -73,6 +73,7 @@ built so far.
 | `internal/retry` | Bounded retries with exponential backoff, jitter, permanent and temporary errors |
 | `internal/sftp` | SSH/SFTP client: key or password auth, `known_hosts` pinning, mkdir -p, upload under a temporary name then rename |
 | `internal/sftptest` | In-process SSH server with the SFTP subsystem, for client and pipeline tests |
+| `internal/metrics` | Dependency-free Prometheus registry (counters, gauges, histograms) and the pipeline observer |
 | `internal/pipeline` | One export of one day: select, build, archive (retried), sign, push (retried), record after every stage; re-run and re-push |
 
 ## Quick start
@@ -110,6 +111,7 @@ that several instances starting together migrate once.
 | `POST /v1/exports/{day}/repush` | Resend the archived file of a day. `202`, `404` without a run, `422` if the day was never archived |
 | `GET /v1/blob/{key}?expires=&signature=` | Download an archived file through an `fs`-driver link |
 | `GET /healthz`, `GET /readyz` | Liveness; readiness (PostgreSQL reachable, not draining) |
+| `GET /metrics` | Prometheus text exposition |
 
 ```bash
 curl -XPOST localhost:8080/v1/exports -d '{"day":"2026-10-28"}'
@@ -283,6 +285,25 @@ pending ──select──▶ ──build──▶ built ──archive──▶ 
 - A failed run is recorded even when the run was cancelled, with a short
   fresh deadline for the write.
 
+### Observability
+
+Logs are JSON on stdout (`slog`), one line per stage outcome with the day,
+attempt, file and duration, and never a secret. Metrics are served at
+`/metrics` in the Prometheus text format:
+
+| Series | Type | Meaning |
+|---|---|---|
+| `export_stage_duration_seconds{stage}` | histogram | Time in `select`, `build`, `archive`, `sign`, `push` |
+| `export_stage_failures_total{stage}` | counter | Stage executions that returned an error (after retries) |
+| `export_runs_total{state}` | counter | Finished runs by final state: `pushed` or `failed` |
+| `export_last_success_timestamp_seconds` | gauge | Unix time of the last pushed run; 0 since start |
+| `export_last_run_rows`, `export_last_run_bytes`, `export_last_run_attempts` | gauge | Shape of the most recent run |
+| `process_start_time_seconds` | gauge | For the "never succeeded since start" rule |
+
+`deploy/prometheus/alerts.yml` holds the rules that follow from them: page
+when no file was pushed for 26 hours or since a start 27 hours ago, warn on
+a failed run, on repeated push failures and on an empty file.
+
 ### Retries
 
 | Variable | Default | Description |
@@ -351,6 +372,21 @@ spec:
                   - { key: sftp_known_hosts, path: known_hosts }
 ```
 
+## Benchmarks
+
+On an Apple M-series laptop (`go test -bench . ./internal/...`):
+
+| Benchmark | Result |
+|---|---|
+| `BenchmarkWrite` (10,000 rows to CSV) | ~6.4 ms, ~230 MB/s |
+| `BenchmarkRun/rows=100` (fakes + fs archive) | ~4 ms per run |
+| `BenchmarkRun/rows=10000` | ~14 ms per run, 26 MB allocated |
+| `BenchmarkGCSSignedURL` (RSA-2048 PKCS#1 v1.5) | ~0.85 ms, 37 allocs |
+| `BenchmarkHMACSignedURL` | ~1.3 µs, 26 allocs |
+
+The daily job is bound by the SFTP round trip and the upload, not by any
+of this: a 10,000-row day builds, archives and signs in under 20 ms.
+
 ## Roadmap
 
 - [x] **Day 1**: Scaffold: full configuration with validation, probes, slog, graceful shutdown, Docker, compose with PostgreSQL + SFTP + GCS emulator, CI
@@ -361,7 +397,7 @@ spec:
 - [x] **Day 6**: SFTP client: key and password auth, `known_hosts` pinning, mkdir -p, upload under a temporary name then rename; tests against an in-process SSH/SFTP server
 - [x] **Day 7**: Pipeline: run state machine, per-stage retries, idempotent re-run of a date; end-to-end test over PostgreSQL, the emulator and the SFTP server
 - [x] **Day 8**: Scheduler at local time and `--once` mode for CronJobs; HTTP API to trigger, inspect, list and re-push runs
-- [ ] **Day 9**: Metrics (rows, bytes, stage durations, failures) and alerts; benchmarks for CSV building
+- [x] **Day 9**: Metrics (rows, bytes, stage durations, failures) and alerts; benchmarks for CSV building
 - [ ] **Day 10**: Final README, design decisions, Docker stack, v1.0.0
 
 ## License

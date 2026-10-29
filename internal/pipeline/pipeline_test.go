@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sort"
@@ -452,5 +453,43 @@ func TestStageError(t *testing.T) {
 	err := &StageError{Stage: "push", Err: base}
 	if err.Error() != "pipeline: push: boom" || !errors.Is(err, base) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// BenchmarkRun measures the pipeline over fakes with the fs archive: the
+// cost of select-build-archive-sign-push-record without the network.
+func BenchmarkRun(b *testing.B) {
+	for _, rows := range []int{100, 10_000} {
+		b.Run(fmt.Sprintf("rows=%d", rows), func(b *testing.B) {
+			from, _ := day.Window(hcm)
+			trips := make([]export.Trip, 0, rows)
+			for i := 0; i < rows; i++ {
+				trips = append(trips, export.Trip{
+					EngagementID: int64(i), PartnerUserID: "SKY", BookingTime: from, TripEndTime: from.Add(time.Duration(i) * time.Millisecond),
+					ServiceType: "CAR", PickupLocation: "1 Lê Lợi, Quận 1", DropoffLocation: "Sân bay Tân Sơn Nhất",
+					TotalFare: 150000, CustomerPay: 140000, Discount: 10000, Currency: "VND", PaymentMethod: "CARD", Status: "SUCCESS",
+				})
+			}
+			fs, err := blob.NewFS(b.TempDir())
+			if err != nil {
+				b.Fatal(err)
+			}
+			signer, _ := blob.NewHMACSigner("http://x", []byte("0123456789abcdef0123456789abcdef"))
+			f := &fixture{trips: &fakeTrips{trips: trips}, runs: newFakeRuns(), store: &failingStore{Store: fs}, uploader: newFakeUploader()}
+			p, err := New(f.trips, f.runs, f.store, signer, f.uploader, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
+				Naming: export.Naming{Prefix: "PartnerAccrual", Version: "v1"}, Format: export.Format{Delimiter: '|'},
+				Location: hcm, BlobPrefix: "partner-export", RemoteDir: "input", SignedURLTTL: time.Hour,
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := p.Run(context.Background(), day); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

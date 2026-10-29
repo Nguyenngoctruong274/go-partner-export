@@ -25,6 +25,7 @@ import (
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/config"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/export"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/httpapi"
+	"github.com/Nguyenngoctruong274/go-partner-export/internal/metrics"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/pipeline"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/postgres"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/retry"
@@ -54,6 +55,7 @@ type deps struct {
 	pipe   *pipeline.Pipeline
 	runs   *postgres.RunStore
 	blob   *httpapi.Blob
+	reg    *metrics.Registry
 }
 
 func run(once bool, date string, repush bool) error {
@@ -155,6 +157,7 @@ func serve(ctx context.Context, d *deps) error {
 			Exports:  exportsAdapter{pipe: d.pipe, runs: d.runs},
 			Location: cfg.Report.Location(),
 		},
+		Metrics: d.reg.Handler(),
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -237,6 +240,10 @@ func buildWithDB(ctx context.Context, cfg config.Config, logger *slog.Logger, db
 		logger.Info("partner SFTP reachable", slog.String("addr", cfg.SFTP.Addr()))
 	}
 
+	reg := metrics.New()
+	reg.NewGauge("process_start_time_seconds", "Unix time the process started.").Set(float64(time.Now().Unix()))
+	observer := metrics.NewExport(reg)
+
 	runs := postgres.NewRunStore(db)
 	pipe, err := pipeline.New(postgres.NewTripStore(db), runs, store, signer, sftpClient, logger, pipeline.Options{
 		Naming:       export.Naming{Prefix: cfg.Report.FilePrefix, Version: cfg.Report.FileVersion},
@@ -246,11 +253,12 @@ func buildWithDB(ctx context.Context, cfg config.Config, logger *slog.Logger, db
 		RemoteDir:    cfg.SFTP.RemoteDir,
 		SignedURLTTL: cfg.Blob.SignedURLTTL,
 		Retry:        retry.Policy{Attempts: cfg.Retry.Attempts, Backoff: cfg.Retry.Backoff, Jitter: 0.2},
+		Observer:     observer,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &deps{cfg: cfg, logger: logger, db: db, pipe: pipe, runs: runs, blob: blobAPI}, nil
+	return &deps{cfg: cfg, logger: logger, db: db, pipe: pipe, runs: runs, blob: blobAPI, reg: reg}, nil
 }
 
 func logConfig(logger *slog.Logger, cfg config.Config) {
