@@ -20,20 +20,26 @@ type Options struct {
 	// Ready reports whether the service can take traffic (dependencies up,
 	// not draining). nil means always ready.
 	Ready func(context.Context) error
+	// Blob, when set, serves signed download links under /v1/blob/.
+	Blob *Blob
 }
 
 type api struct {
 	logger *slog.Logger
 	ready  func(context.Context) error
+	blob   *Blob
 }
 
 // NewHandler returns the root handler of the service.
 func NewHandler(logger *slog.Logger, opts Options) http.Handler {
-	a := &api{logger: logger, ready: opts.Ready}
+	a := &api{logger: logger, ready: opts.Ready, blob: opts.Blob}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.healthz)
 	mux.HandleFunc("GET /readyz", a.readyz)
+	if a.blob != nil {
+		a.routeBlob(mux)
+	}
 	return a.withRequestID(a.withAccessLog(mux))
 }
 

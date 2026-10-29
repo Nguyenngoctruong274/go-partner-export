@@ -80,6 +80,12 @@ type Blob struct {
 	Prefix string
 	// FSRoot is the directory used by the fs driver.
 	FSRoot string
+	// PublicURL is the scheme and host exportd is reachable at; links for
+	// the fs driver are built under it.
+	PublicURL string
+	// FSSigningSecret signs fs-driver links (at least 16 bytes). Empty
+	// means a random secret per process: links then die with a restart.
+	FSSigningSecret string
 	// GCSEndpoint overrides the storage API base URL, for an emulator.
 	GCSEndpoint string
 	// GCSCredentialsFile optionally points at a service-account JSON key for
@@ -150,6 +156,8 @@ func load(getenv func(string) string) (Config, error) {
 			Bucket:             getenv("PX_BLOB_BUCKET"),
 			Prefix:             valueOr(getenv("PX_BLOB_PREFIX"), "partner-export"),
 			FSRoot:             valueOr(getenv("PX_BLOB_FS_ROOT"), "./data/blob"),
+			PublicURL:          valueOr(getenv("PX_PUBLIC_URL"), "http://localhost:8080"),
+			FSSigningSecret:    getenv("PX_FS_SIGNING_SECRET"),
 			GCSEndpoint:        getenv("PX_GCS_ENDPOINT"),
 			GCSCredentialsFile: getenv("PX_GCS_CREDENTIALS_FILE"),
 			GCSSignerKeyFile:   getenv("PX_GCS_SIGNER_KEY_FILE"),
@@ -221,6 +229,12 @@ func load(getenv func(string) string) (Config, error) {
 	cfg.Blob.SignedURLTTL = p.duration("PX_SIGNED_URL_TTL", cfg.Blob.SignedURLTTL, time.Minute, MaxSignedURLTTL)
 	switch cfg.Blob.Driver {
 	case BlobDriverFS:
+		if u, err := url.Parse(cfg.Blob.PublicURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			p.errorf("PX_PUBLIC_URL: must be an http(s) URL")
+		}
+		if n := len(cfg.Blob.FSSigningSecret); n > 0 && n < 16 {
+			p.errorf("PX_FS_SIGNING_SECRET: must be at least 16 bytes")
+		}
 	case BlobDriverGCS:
 		if cfg.Blob.Bucket == "" {
 			p.errorf("PX_BLOB_BUCKET: required when PX_BLOB_DRIVER=gcs")

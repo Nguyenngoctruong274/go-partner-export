@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nguyenngoctruong274/go-partner-export/internal/blob"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/config"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/httpapi"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/postgres"
@@ -72,6 +74,12 @@ func run() error {
 	}
 	logger.Info("database ready", slog.Int("max_conns", cfg.DBMaxConns))
 
+	store, signer, blobAPI, err := buildBlob(startCtx, cfg.Blob, logger)
+	if err != nil {
+		return err
+	}
+	_, _ = store, signer // wired into the pipeline on day 7
+
 	// Readiness turns false the moment shutdown starts, so load balancers
 	// stop routing new requests while in-flight ones finish.
 	var draining atomic.Bool
@@ -84,7 +92,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewHandler(logger, httpapi.Options{Ready: ready}),
+		Handler:           httpapi.NewHandler(logger, httpapi.Options{Ready: ready, Blob: blobAPI}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -117,4 +125,41 @@ func run() error {
 	}
 	logger.Info("http server stopped")
 	return nil
+}
+
+// buildBlob wires the archive store and the link signer for the configured
+// driver. With the fs driver, exportd serves the links itself.
+func buildBlob(ctx context.Context, cfg config.Blob, logger *slog.Logger) (blob.Store, blob.Signer, *httpapi.Blob, error) {
+	switch cfg.Driver {
+	case config.BlobDriverGCS:
+		store, err := blob.NewGCS(ctx, blob.GCSOptions{
+			Bucket: cfg.Bucket, Endpoint: cfg.GCSEndpoint, CredentialsFile: cfg.GCSCredentialsFile,
+		})
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		signer, err := blob.NewGCSSignerFromFile(cfg.GCSSignerKeyFile, cfg.Bucket, cfg.GCSEndpoint)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return store, signer, nil, nil
+	default:
+		store, err := blob.NewFS(cfg.FSRoot)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		secret := []byte(cfg.FSSigningSecret)
+		if len(secret) == 0 {
+			secret = make([]byte, 32)
+			if _, err := rand.Read(secret); err != nil {
+				return nil, nil, nil, fmt.Errorf("generate signing secret: %w", err)
+			}
+			logger.Warn("PX_FS_SIGNING_SECRET is empty; download links will stop working when this process restarts")
+		}
+		signer, err := blob.NewHMACSigner(cfg.PublicURL, secret)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return store, signer, &httpapi.Blob{Store: store, Verifier: signer}, nil
+	}
 }

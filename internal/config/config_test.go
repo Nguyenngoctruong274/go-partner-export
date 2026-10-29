@@ -45,6 +45,7 @@ func TestLoadDefaults(t *testing.T) {
 			Driver:       BlobDriverFS,
 			Prefix:       "partner-export",
 			FSRoot:       "./data/blob",
+			PublicURL:    "http://localhost:8080",
 			SignedURLTTL: MaxSignedURLTTL,
 		},
 		SFTP: SFTP{
@@ -129,6 +130,7 @@ func TestLoadOverrides(t *testing.T) {
 			Bucket:             "acme-fin-prod",
 			Prefix:             "partner-report-daily",
 			FSRoot:             "./data/blob",
+			PublicURL:          "http://localhost:8080",
 			GCSEndpoint:        "http://localhost:4443",
 			GCSCredentialsFile: "/var/run/secrets/gcs/client.json",
 			GCSSignerKeyFile:   "/var/run/secrets/gcs/signer.json",
@@ -247,6 +249,11 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			name: "unknown blob driver and absolute prefix",
 			env:  with("PX_BLOB_DRIVER", "s3", "PX_BLOB_PREFIX", "/exports"),
 			want: []string{`PX_BLOB_DRIVER: must be "fs" or "gcs"`, "PX_BLOB_PREFIX: must be a relative path"},
+		},
+		{
+			name: "fs driver link settings",
+			env:  with("PX_PUBLIC_URL", "export.internal", "PX_FS_SIGNING_SECRET", "short"),
+			want: []string{"PX_PUBLIC_URL: must be an http(s) URL", "PX_FS_SIGNING_SECRET: must be at least 16 bytes"},
 		},
 		{
 			name: "gcs endpoint must be a URL",

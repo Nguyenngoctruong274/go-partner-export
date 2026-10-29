@@ -64,11 +64,11 @@ built so far.
 |---|---|
 | `cmd/exportd` | Service wiring, graceful shutdown; later the scheduler and a `--once` mode for Kubernetes CronJobs |
 | `internal/config` | Environment configuration with validation; secrets are never echoed |
-| `internal/httpapi` | Probes; later `/v1/exports` to trigger, inspect and re-push runs |
+| `internal/httpapi` | Probes; `/v1/blob/` serves HMAC-signed links for the `fs` driver; later `/v1/exports` |
 | `internal/export` | Report day and window in a zone, next run time, file naming and parsing, CSV writing and reading (no I/O) |
 | `internal/postgres` | Connection pool, embedded migrations under an advisory lock, `trips` upserts and window queries, `export_runs` history |
 | `internal/testdb` | Isolated PostgreSQL schema per test (`PX_TEST_DATABASE_URL`) |
-| `internal/blob` | `Store` interface; `fs` driver (temp file + rename) and `gcs` driver over the JSON API; later V4 signed URLs |
+| `internal/blob` | `Store` interface; `fs` driver (temp file + rename) and `gcs` driver over the JSON API; `Signer`: GCS V4 signatures with a service-account key, HMAC links for `fs` |
 | `internal/retry` | Bounded retries with exponential backoff, jitter, permanent and temporary errors |
 | `internal/sftp` *(day 6)* | SSH/SFTP client: key or password auth, pinned host keys, atomic upload |
 | `internal/pipeline` *(day 7)* | Orchestration, retries, run state machine |
@@ -134,6 +134,8 @@ Files are named `<prefix>_<version>_<YYYYMMDD>_<seq>.csv`, for example
 | `PX_BLOB_DRIVER` | `fs` | `fs` (a directory) or `gcs` |
 | `PX_BLOB_PREFIX` | `partner-export` | Folder inside the bucket or directory |
 | `PX_BLOB_FS_ROOT` | `./data/blob` | Directory used by the `fs` driver |
+| `PX_PUBLIC_URL` | `http://localhost:8080` | Scheme and host exportd is reachable at; `fs` links are built under it |
+| `PX_FS_SIGNING_SECRET` | *(random per start)* | HMAC key for `fs` links, at least 16 bytes; set it so links survive restarts and work across instances |
 | `PX_BLOB_BUCKET` | *required for gcs* | GCS bucket, e.g. `acme-fin-prod` |
 | `PX_GCS_ENDPOINT` | `https://storage.googleapis.com` | API base URL; point it at an emulator such as fake-gcs-server locally |
 | `PX_GCS_CREDENTIALS_FILE` | *(ADC)* | Optional service-account JSON for the storage client. Empty uses Application Default Credentials: Workload Identity on GKE, `GOOGLE_APPLICATION_CREDENTIALS`, or `gcloud auth application-default login` |
@@ -158,7 +160,7 @@ Files are named `<prefix>_<version>_<YYYYMMDD>_<seq>.csv`, for example
 4. Mount the key file from a Secret and reference it by path. Never put the
    JSON into an environment variable or a chart.
 
-**How a signed URL is generated** (implemented on day 5)
+**How a signed URL is generated** (`internal/blob/gcssign.go`)
 
 ```
 canonical request = GET \n /<bucket>/<object> \n <sorted query> \n host:storage.googleapis.com \n\n host \n UNSIGNED-PAYLOAD
@@ -171,7 +173,13 @@ url               = https://storage.googleapis.com/<bucket>/<object>?X-Goog-Algo
 
 GCS recomputes the same signature with the account's public key; if it
 matches and `X-Goog-Date + X-Goog-Expires` is in the future, the object is
-served. Nothing is stored on the GCS side, so a link cannot be revoked
+served. The test suite does the same recomputation with a generated key and
+checks the signature with `rsa.VerifyPKCS1v15`, so a change to the canonical
+request or the escaping fails the build instead of failing at the partner.
+
+With the `fs` driver there is no cloud to serve links, so exportd signs
+`<PX_PUBLIC_URL>/v1/blob/<key>?expires=<unix>&signature=<HMAC-SHA256>` and
+serves it itself: 403 for a bad proof, 410 once expired. Nothing is stored on the GCS side, so a link cannot be revoked
 before it expires, which is why the TTL is capped and the run record only
 holds the link rather than exposing it on an unauthenticated endpoint.
 
@@ -281,7 +289,7 @@ spec:
 - [x] **Day 2**: Export domain: report window in a zone, file naming with version and sequence, CSV builder (BOM, delimiter, column order), integer money; table tests and fuzzing
 - [x] **Day 3**: Schema and migrations: rows to export and `export_runs`; store with upsert, window query and run upsert by date; isolated test schemas
 - [x] **Day 4**: Blob store: `Store` interface, `fs` driver, `gcs` driver against the emulator; content types; retries with backoff
-- [ ] **Day 5**: Signed URLs: GCS V4 signing with a service-account key, verified against a fixed key and clock; HMAC-signed links for the `fs` driver
+- [x] **Day 5**: Signed URLs: GCS V4 signing with a service-account key, verified against a fixed key and clock; HMAC-signed links for the `fs` driver
 - [ ] **Day 6**: SFTP client: key and password auth, `known_hosts` pinning, mkdir -p, upload under a temporary name then rename; tests against an in-process SSH/SFTP server
 - [ ] **Day 7**: Pipeline: run state machine, per-stage retries, idempotent re-run of a date; end-to-end test over PostgreSQL, the emulator and the SFTP server
 - [ ] **Day 8**: Scheduler at local time and `--once` mode for CronJobs; HTTP API to trigger, inspect, list and re-push runs
