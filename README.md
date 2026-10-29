@@ -12,7 +12,7 @@ a copy in object storage (Google Cloud Storage or a directory), signs a
 time-limited download link to that copy, pushes the file to the partner's
 SFTP server and records the run so that a failed day can be replayed.
 
-> 🚧 Built in public as a 10-day series. See the [roadmap](#roadmap) for progress.
+> Built in public as a 10-day series; v1.0.0 is the result. The [roadmap](#roadmap) lists what each day added.
 
 ## Why
 
@@ -57,8 +57,6 @@ flowchart LR
     P -->|6. record run + link| DB
 ```
 
-The diagram is the target design; the [roadmap](#roadmap) shows what is
-built so far.
 
 | Package | Responsibility |
 |---|---|
@@ -87,6 +85,20 @@ make test        # unit tests with the race detector
 make test-db     # unit tests + tests against the real PostgreSQL and the GCS emulator
 make stack       # exportd, its dependencies and Prometheus (:9090) together in Docker
 ```
+
+With the stack up, trigger yesterday's export and follow it end to end:
+
+```bash
+curl -XPOST localhost:8080/v1/exports                 # 202 {"day":"...","state":"pending"}
+curl localhost:8080/v1/exports | jq '.runs[0]'        # state, rows, download_url, remote_path
+curl "$(curl -s localhost:8080/v1/exports | jq -r '.runs[0].download_url')" | head -3   # the archived file
+docker compose exec sftp ls /home/partner/input/      # the file as the partner sees it
+open http://localhost:9090/alerts                     # the alert rules, evaluated against live metrics
+```
+
+Rows to export arrive in the `trips` table from your booking system (see
+`internal/postgres/migrations/0001_trips.sql`); locally, insert a few with
+`psql` or let the e2e test seed them.
 
 exportd applies pending migrations at startup, under an advisory lock so
 that several instances starting together migrate once.
@@ -372,6 +384,45 @@ spec:
                   - { key: sftp_known_hosts, path: known_hosts }
 ```
 
+## Design decisions
+
+- **The report day is a calendar day in a zone, not a 24-hour window.**
+  `export.Day` carries year, month and day; its window comes from
+  `time.Date` in the partner's zone, so a daylight-saving change makes a
+  23- or 25-hour day instead of shifting rows across the boundary.
+- **Archive before push, and record the archive.** The signed link in the
+  run record points at exactly the bytes the partner received. Re-push
+  resends those bytes; it never rebuilds, so "send it again" cannot quietly
+  send different data.
+- **Signing is done locally with a key file.** A V4 signature needs the
+  service account's private key. Workload Identity has none, so the
+  signer takes its own key file and the storage client keeps using ADC.
+  The algorithm is written out in `gcssign.go` and verified in tests
+  against the public key rather than trusted from a library.
+- **Host keys are pinned.** `InsecureIgnoreHostKey` exists only behind an
+  explicit flag that logs a warning; production deployments carry a
+  `known_hosts` file obtained from the partner and verified by fingerprint.
+  A mismatch is not retried: it is either a rotation to confirm or an
+  interception to stop.
+- **Writes are atomic on both sides.** The fs archive and the SFTP upload
+  write a temporary name and rename, so a poller never reads half a file.
+- **Retries only where they help.** `archive` and `push` are network
+  stages with bounded retries and jittered backoff; `select` and `build`
+  are not retried because their failures are not transient. Client
+  errors from GCS (4xx) and host-key mismatches stop retrying at once.
+- **One in-flight run per day, drained at shutdown.** The API runs exports
+  in the background with a per-day guard and the server waits for them
+  before closing the database, so a SIGTERM mid-push leaves a complete
+  run record.
+- **Money is `int64` in minor units** from the schema to the CSV. No
+  `float64` appears anywhere in the data path.
+- **Two execution modes, one pipeline.** The built-in scheduler and
+  `--once` call the same `pipeline.Run`; a CronJob owns the schedule in
+  Kubernetes, the scheduler does on a plain VM.
+- **Dependencies stay small.** PostgreSQL via `lib/pq`, SSH/SFTP via
+  `x/crypto` and `pkg/sftp`, GCS via its JSON API with `x/oauth2`, and a
+  small in-repo Prometheus registry. No framework, no cloud SDK.
+
 ## Benchmarks
 
 On an Apple M-series laptop (`go test -bench . ./internal/...`):
@@ -398,7 +449,7 @@ of this: a 10,000-row day builds, archives and signs in under 20 ms.
 - [x] **Day 7**: Pipeline: run state machine, per-stage retries, idempotent re-run of a date; end-to-end test over PostgreSQL, the emulator and the SFTP server
 - [x] **Day 8**: Scheduler at local time and `--once` mode for CronJobs; HTTP API to trigger, inspect, list and re-push runs
 - [x] **Day 9**: Metrics (rows, bytes, stage durations, failures) and alerts; benchmarks for CSV building
-- [ ] **Day 10**: Final README, design decisions, Docker stack, v1.0.0
+- [x] **Day 10**: Final README, design decisions, Docker stack with Prometheus, v1.0.0
 
 ## License
 
