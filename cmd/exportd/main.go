@@ -19,6 +19,7 @@ import (
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/config"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/httpapi"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/postgres"
+	"github.com/Nguyenngoctruong274/go-partner-export/internal/sftp"
 )
 
 var errDraining = errors.New("shutting down")
@@ -78,7 +79,19 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	_, _ = store, signer // wired into the pipeline on day 7
+	sftpClient, err := buildSFTP(cfg.SFTP)
+	if err != nil {
+		return err
+	}
+	// A wrong password or a changed host key shows up at startup, not at
+	// 01:00 when the report is due. Connectivity is only logged, so a
+	// partner outage does not keep the API from serving.
+	if err := sftpClient.Ping(startCtx); err != nil {
+		logger.Warn("partner SFTP unreachable at startup", slog.Any("error", err))
+	} else {
+		logger.Info("partner SFTP reachable", slog.String("addr", cfg.SFTP.Addr()))
+	}
+	_, _, _ = store, signer, sftpClient // wired into the pipeline on day 7
 
 	// Readiness turns false the moment shutdown starts, so load balancers
 	// stop routing new requests while in-flight ones finish.
@@ -162,4 +175,24 @@ func buildBlob(ctx context.Context, cfg config.Blob, logger *slog.Logger) (blob.
 		}
 		return store, signer, &httpapi.Blob{Store: store, Verifier: signer}, nil
 	}
+}
+
+// buildSFTP reads the key file, if any, and prepares the client.
+func buildSFTP(cfg config.SFTP) (*sftp.Client, error) {
+	opts := sftp.Options{
+		Addr: cfg.Addr(), User: cfg.User,
+		KnownHostsFile: cfg.KnownHostsFile, InsecureSkipHostKey: cfg.InsecureSkipHostKey,
+		Timeout: cfg.Timeout,
+	}
+	switch cfg.Auth {
+	case config.SFTPAuthPassword:
+		opts.Password = cfg.Password
+	default:
+		key, err := os.ReadFile(cfg.PrivateKeyFile) // #nosec G304 -- path comes from configuration
+		if err != nil {
+			return nil, fmt.Errorf("read sftp private key: %w", err)
+		}
+		opts.PrivateKeyPEM = key
+	}
+	return sftp.New(opts)
 }

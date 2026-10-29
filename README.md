@@ -70,7 +70,8 @@ built so far.
 | `internal/testdb` | Isolated PostgreSQL schema per test (`PX_TEST_DATABASE_URL`) |
 | `internal/blob` | `Store` interface; `fs` driver (temp file + rename) and `gcs` driver over the JSON API; `Signer`: GCS V4 signatures with a service-account key, HMAC links for `fs` |
 | `internal/retry` | Bounded retries with exponential backoff, jitter, permanent and temporary errors |
-| `internal/sftp` *(day 6)* | SSH/SFTP client: key or password auth, pinned host keys, atomic upload |
+| `internal/sftp` | SSH/SFTP client: key or password auth, `known_hosts` pinning, mkdir -p, upload under a temporary name then rename |
+| `internal/sftptest` | In-process SSH server with the SFTP subsystem, for client and pipeline tests |
 | `internal/pipeline` *(day 7)* | Orchestration, retries, run state machine |
 
 ## Quick start
@@ -215,6 +216,17 @@ holds the link rather than exposing it on an unauthenticated endpoint.
    `<your-company>/input` in the partner's layout. The job creates missing
    segments, but the login must be allowed to write there.
 
+**How a delivery happens** (`internal/sftp`)
+
+- Every upload opens a fresh SSH connection with a dial and handshake
+  timeout. The host key is checked against `known_hosts` first; a mismatch
+  is a `HostKeyMismatchError` that is never retried and never sends the file.
+- The file is written as `.<name>.uploading` and renamed to `<name>` when
+  complete, so a partner job polling the directory cannot pick up a
+  half-written file. A re-run of the same day replaces the file.
+- exportd pings the server at startup and logs the result, so a wrong
+  password or a rotated host key is visible on deploy rather than at 01:00.
+
 ### Retries
 
 | Variable | Default | Description |
@@ -290,7 +302,7 @@ spec:
 - [x] **Day 3**: Schema and migrations: rows to export and `export_runs`; store with upsert, window query and run upsert by date; isolated test schemas
 - [x] **Day 4**: Blob store: `Store` interface, `fs` driver, `gcs` driver against the emulator; content types; retries with backoff
 - [x] **Day 5**: Signed URLs: GCS V4 signing with a service-account key, verified against a fixed key and clock; HMAC-signed links for the `fs` driver
-- [ ] **Day 6**: SFTP client: key and password auth, `known_hosts` pinning, mkdir -p, upload under a temporary name then rename; tests against an in-process SSH/SFTP server
+- [x] **Day 6**: SFTP client: key and password auth, `known_hosts` pinning, mkdir -p, upload under a temporary name then rename; tests against an in-process SSH/SFTP server
 - [ ] **Day 7**: Pipeline: run state machine, per-stage retries, idempotent re-run of a date; end-to-end test over PostgreSQL, the emulator and the SFTP server
 - [ ] **Day 8**: Scheduler at local time and `--once` mode for CronJobs; HTTP API to trigger, inspect, list and re-push runs
 - [ ] **Day 9**: Metrics (rows, bytes, stage durations, failures) and alerts; benchmarks for CSV building
