@@ -62,9 +62,10 @@ built so far.
 
 | Package | Responsibility |
 |---|---|
-| `cmd/exportd` | Service wiring, graceful shutdown; later the scheduler and a `--once` mode for Kubernetes CronJobs |
+| `cmd/exportd` | Wiring, graceful shutdown, `--once` / `--date` / `--repush` for CronJobs |
 | `internal/config` | Environment configuration with validation; secrets are never echoed |
-| `internal/httpapi` | Probes; `/v1/blob/` serves HMAC-signed links for the `fs` driver; later `/v1/exports` |
+| `internal/httpapi` | Probes; `/v1/exports` to start, inspect, list and re-push runs (one in flight per day, drained at shutdown); `/v1/blob/` serves `fs` links |
+| `internal/scheduler` | Fires the export at a local wall-clock time every day |
 | `internal/export` | Report day and window in a zone, next run time, file naming and parsing, CSV writing and reading (no I/O) |
 | `internal/postgres` | Connection pool, embedded migrations under an advisory lock, `trips` upserts and window queries, `export_runs` history |
 | `internal/testdb` | Isolated PostgreSQL schema per test (`PX_TEST_DATABASE_URL`) |
@@ -88,6 +89,38 @@ make stack       # exportd and its dependencies together in Docker
 
 exportd applies pending migrations at startup, under an advisory lock so
 that several instances starting together migrate once.
+
+### Two ways to run the export
+
+- **Service mode** (`exportd`): serves the API and fires the export every
+  day at `PX_REPORT_SCHEDULE_AT` in `PX_REPORT_TIMEZONE`.
+- **One-shot mode** (`exportd --once [--date YYYY-MM-DD] [--repush]`):
+  exports one day and exits non-zero on failure, so a Kubernetes CronJob
+  can own the schedule and the retries. `--date` defaults to yesterday in
+  the report zone and must be a day that is over; `--repush` resends the
+  archived file of that day without rebuilding it.
+
+### HTTP API
+
+| Method and path | What it does |
+|---|---|
+| `POST /v1/exports` | Start a run in the background. Body optional: `{"day":"2026-10-28"}`; default yesterday. `202` with the day, `409` while a run for that day is in flight, `422` for a day that is not over |
+| `GET /v1/exports/{day}` | The run record: state, stage, error, rows, bytes, file name, archived key, signed download link, remote path, attempts, timestamps; `running` says whether it is in flight |
+| `GET /v1/exports?state=failed&before=2026-10-28&limit=50` | Runs newest first, filtered by state, paged by day |
+| `POST /v1/exports/{day}/repush` | Resend the archived file of a day. `202`, `404` without a run, `422` if the day was never archived |
+| `GET /v1/blob/{key}?expires=&signature=` | Download an archived file through an `fs`-driver link |
+| `GET /healthz`, `GET /readyz` | Liveness; readiness (PostgreSQL reachable, not draining) |
+
+```bash
+curl -XPOST localhost:8080/v1/exports -d '{"day":"2026-10-28"}'
+curl localhost:8080/v1/exports/2026-10-28 | jq .state,.download_url
+curl 'localhost:8080/v1/exports?state=failed'
+curl -XPOST localhost:8080/v1/exports/2026-10-28/repush
+```
+
+Runs started over HTTP outlive the request. At shutdown the server stops
+listening, then waits for in-flight runs within `PX_SHUTDOWN_TIMEOUT`, so a
+SIGTERM during a push does not leave a half-recorded run.
 
 The Makefile exports local defaults (fs blob driver, password auth to the
 SFTP stand-in, host key check skipped) so that `make run` needs no `.env`.
@@ -327,7 +360,7 @@ spec:
 - [x] **Day 5**: Signed URLs: GCS V4 signing with a service-account key, verified against a fixed key and clock; HMAC-signed links for the `fs` driver
 - [x] **Day 6**: SFTP client: key and password auth, `known_hosts` pinning, mkdir -p, upload under a temporary name then rename; tests against an in-process SSH/SFTP server
 - [x] **Day 7**: Pipeline: run state machine, per-stage retries, idempotent re-run of a date; end-to-end test over PostgreSQL, the emulator and the SFTP server
-- [ ] **Day 8**: Scheduler at local time and `--once` mode for CronJobs; HTTP API to trigger, inspect, list and re-push runs
+- [x] **Day 8**: Scheduler at local time and `--once` mode for CronJobs; HTTP API to trigger, inspect, list and re-push runs
 - [ ] **Day 9**: Metrics (rows, bytes, stage durations, failures) and alerts; benchmarks for CSV building
 - [ ] **Day 10**: Final README, design decisions, Docker stack, v1.0.0
 

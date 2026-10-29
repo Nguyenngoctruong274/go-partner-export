@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func newTestHandler(ready func(context.Context) error) http.Handler {
+func newTestHandler(ready func(context.Context) error) *Handler {
 	return NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Ready: ready})
 }
 

@@ -22,16 +22,33 @@ type Options struct {
 	Ready func(context.Context) error
 	// Blob, when set, serves signed download links under /v1/blob/.
 	Blob *Blob
+	// Exports, when set, serves the run endpoints under /v1/exports.
+	Exports *ExportOptions
 }
 
 type api struct {
-	logger *slog.Logger
-	ready  func(context.Context) error
-	blob   *Blob
+	logger  *slog.Logger
+	ready   func(context.Context) error
+	blob    *Blob
+	exports *exportRunner
 }
 
-// NewHandler returns the root handler of the service.
-func NewHandler(logger *slog.Logger, opts Options) http.Handler {
+// Handler is the root handler of the service.
+type Handler struct {
+	http.Handler
+	runner *exportRunner
+}
+
+// Drain waits for exports started over HTTP to finish, or for ctx to end.
+func (h *Handler) Drain(ctx context.Context) error {
+	if h.runner == nil {
+		return nil
+	}
+	return h.runner.Drain(ctx)
+}
+
+// NewHandler builds the root handler.
+func NewHandler(logger *slog.Logger, opts Options) *Handler {
 	a := &api{logger: logger, ready: opts.Ready, blob: opts.Blob}
 
 	mux := http.NewServeMux()
@@ -40,7 +57,11 @@ func NewHandler(logger *slog.Logger, opts Options) http.Handler {
 	if a.blob != nil {
 		a.routeBlob(mux)
 	}
-	return a.withRequestID(a.withAccessLog(mux))
+	if opts.Exports != nil && opts.Exports.Exports != nil {
+		a.exports = newExportRunner(logger, *opts.Exports)
+		a.routeExports(mux)
+	}
+	return &Handler{Handler: a.withRequestID(a.withAccessLog(mux)), runner: a.exports}
 }
 
 // healthz answers as long as the process is serving: it is a liveness probe
