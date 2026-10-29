@@ -66,7 +66,8 @@ built so far.
 | `internal/config` | Environment configuration with validation; secrets are never echoed |
 | `internal/httpapi` | Probes; later `/v1/exports` to trigger, inspect and re-push runs |
 | `internal/export` | Report day and window in a zone, next run time, file naming and parsing, CSV writing and reading (no I/O) |
-| `internal/postgres` *(day 3)* | Migrations, rows to export, run history |
+| `internal/postgres` | Connection pool, embedded migrations under an advisory lock, `trips` upserts and window queries, `export_runs` history |
+| `internal/testdb` | Isolated PostgreSQL schema per test (`PX_TEST_DATABASE_URL`) |
 | `internal/blob` *(days 4–5)* | `Store` interface; `fs` and `gcs` drivers; V4 signed URLs |
 | `internal/sftp` *(day 6)* | SSH/SFTP client: key or password auth, pinned host keys, atomic upload |
 | `internal/pipeline` *(day 7)* | Orchestration, retries, run state machine |
@@ -77,10 +78,14 @@ built so far.
 make up          # PostgreSQL, an SFTP stand-in (atmoz/sftp) and a GCS emulator in Docker
 make run         # exportd on :8080 with the local defaults from the Makefile
 curl localhost:8080/healthz   # {"status":"ok"}
-curl localhost:8080/readyz    # {"status":"ready"}; 503 while shutting down
+curl localhost:8080/readyz    # {"status":"ready"}; 503 if PostgreSQL is down or while shutting down
 make test        # unit tests with the race detector
+make test-db     # unit tests + tests against the real PostgreSQL
 make stack       # exportd and its dependencies together in Docker
 ```
+
+exportd applies pending migrations at startup, under an advisory lock so
+that several instances starting together migrate once.
 
 The Makefile exports local defaults (fs blob driver, password auth to the
 SFTP stand-in, host key check skipped) so that `make run` needs no `.env`.
@@ -272,7 +277,7 @@ spec:
 
 - [x] **Day 1**: Scaffold: full configuration with validation, probes, slog, graceful shutdown, Docker, compose with PostgreSQL + SFTP + GCS emulator, CI
 - [x] **Day 2**: Export domain: report window in a zone, file naming with version and sequence, CSV builder (BOM, delimiter, column order), integer money; table tests and fuzzing
-- [ ] **Day 3**: Schema and migrations: rows to export and `export_runs`; store with upsert, window query and run upsert by date; isolated test schemas
+- [x] **Day 3**: Schema and migrations: rows to export and `export_runs`; store with upsert, window query and run upsert by date; isolated test schemas
 - [ ] **Day 4**: Blob store: `Store` interface, `fs` driver, `gcs` driver against the emulator; content types; retries with backoff
 - [ ] **Day 5**: Signed URLs: GCS V4 signing with a service-account key, verified against a fixed key and clock; HMAC-signed links for the `fs` driver
 - [ ] **Day 6**: SFTP client: key and password auth, `known_hosts` pinning, mkdir -p, upload under a temporary name then rename; tests against an in-process SSH/SFTP server

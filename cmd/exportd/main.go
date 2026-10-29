@@ -16,6 +16,7 @@ import (
 
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/config"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/httpapi"
+	"github.com/Nguyenngoctruong274/go-partner-export/internal/postgres"
 )
 
 var errDraining = errors.New("shutting down")
@@ -57,14 +58,28 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	startCtx, cancelStart := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelStart()
+	db, err := postgres.Open(startCtx, cfg.DatabaseURL, cfg.DBMaxConns)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	// Instances starting together serialize on an advisory lock, so the
+	// schema is migrated once and nobody serves before it is current.
+	if err := postgres.Migrate(startCtx, db); err != nil {
+		return err
+	}
+	logger.Info("database ready", slog.Int("max_conns", cfg.DBMaxConns))
+
 	// Readiness turns false the moment shutdown starts, so load balancers
 	// stop routing new requests while in-flight ones finish.
 	var draining atomic.Bool
-	ready := func(context.Context) error {
+	ready := func(ctx context.Context) error {
 		if draining.Load() {
 			return errDraining
 		}
-		return nil
+		return db.PingContext(ctx)
 	}
 
 	srv := &http.Server{
