@@ -17,8 +17,11 @@ import (
 
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/blob"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/config"
+	"github.com/Nguyenngoctruong274/go-partner-export/internal/export"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/httpapi"
+	"github.com/Nguyenngoctruong274/go-partner-export/internal/pipeline"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/postgres"
+	"github.com/Nguyenngoctruong274/go-partner-export/internal/retry"
 	"github.com/Nguyenngoctruong274/go-partner-export/internal/sftp"
 )
 
@@ -91,7 +94,19 @@ func run() error {
 	} else {
 		logger.Info("partner SFTP reachable", slog.String("addr", cfg.SFTP.Addr()))
 	}
-	_, _, _ = store, signer, sftpClient // wired into the pipeline on day 7
+	pipe, err := pipeline.New(postgres.NewTripStore(db), postgres.NewRunStore(db), store, signer, sftpClient, logger, pipeline.Options{
+		Naming:       export.Naming{Prefix: cfg.Report.FilePrefix, Version: cfg.Report.FileVersion},
+		Format:       export.Format{Delimiter: cfg.Report.CSVDelimiter},
+		Location:     cfg.Report.Location(),
+		BlobPrefix:   cfg.Blob.Prefix,
+		RemoteDir:    cfg.SFTP.RemoteDir,
+		SignedURLTTL: cfg.Blob.SignedURLTTL,
+		Retry:        retry.Policy{Attempts: cfg.Retry.Attempts, Backoff: cfg.Retry.Backoff, Jitter: 0.2},
+	})
+	if err != nil {
+		return err
+	}
+	_ = pipe // driven by the scheduler and the API on day 8
 
 	// Readiness turns false the moment shutdown starts, so load balancers
 	// stop routing new requests while in-flight ones finish.

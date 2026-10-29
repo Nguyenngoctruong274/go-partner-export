@@ -72,7 +72,7 @@ built so far.
 | `internal/retry` | Bounded retries with exponential backoff, jitter, permanent and temporary errors |
 | `internal/sftp` | SSH/SFTP client: key or password auth, `known_hosts` pinning, mkdir -p, upload under a temporary name then rename |
 | `internal/sftptest` | In-process SSH server with the SFTP subsystem, for client and pipeline tests |
-| `internal/pipeline` *(day 7)* | Orchestration, retries, run state machine |
+| `internal/pipeline` | One export of one day: select, build, archive (retried), sign, push (retried), record after every stage; re-run and re-push |
 
 ## Quick start
 
@@ -227,6 +227,29 @@ holds the link rather than exposing it on an unauthenticated endpoint.
 - exportd pings the server at startup and logs the result, so a wrong
   password or a rotated host key is visible on deploy rather than at 01:00.
 
+### Run lifecycle
+
+Every export of a day is one row in `export_runs`, written after each
+stage so an operator always sees how far it got:
+
+```
+pending ──select──▶ ──build──▶ built ──archive──▶ ──sign──▶ archived ──push──▶ pushed
+   │                   │                 │                        │
+   └───────────────────┴─────────────────┴────────────────────────┴──▶ failed (stage, error)
+```
+
+- `archive` and `push` talk to the network and are retried with backoff;
+  `select` and `build` are not, because a database error or a bad row
+  is not fixed by trying again a second later.
+- Running a day again starts from `pending` with `attempts + 1`. The file
+  name stays the same, the archived object and the remote file are
+  replaced, so however often a day runs the partner ends up with one file
+  holding the latest data.
+- Re-push sends the **archived** bytes again without rebuilding, for the
+  case where the partner lost the file and the data must not change.
+- A failed run is recorded even when the run was cancelled, with a short
+  fresh deadline for the write.
+
 ### Retries
 
 | Variable | Default | Description |
@@ -303,7 +326,7 @@ spec:
 - [x] **Day 4**: Blob store: `Store` interface, `fs` driver, `gcs` driver against the emulator; content types; retries with backoff
 - [x] **Day 5**: Signed URLs: GCS V4 signing with a service-account key, verified against a fixed key and clock; HMAC-signed links for the `fs` driver
 - [x] **Day 6**: SFTP client: key and password auth, `known_hosts` pinning, mkdir -p, upload under a temporary name then rename; tests against an in-process SSH/SFTP server
-- [ ] **Day 7**: Pipeline: run state machine, per-stage retries, idempotent re-run of a date; end-to-end test over PostgreSQL, the emulator and the SFTP server
+- [x] **Day 7**: Pipeline: run state machine, per-stage retries, idempotent re-run of a date; end-to-end test over PostgreSQL, the emulator and the SFTP server
 - [ ] **Day 8**: Scheduler at local time and `--once` mode for CronJobs; HTTP API to trigger, inspect, list and re-push runs
 - [ ] **Day 9**: Metrics (rows, bytes, stage durations, failures) and alerts; benchmarks for CSV building
 - [ ] **Day 10**: Final README, design decisions, Docker stack, v1.0.0
