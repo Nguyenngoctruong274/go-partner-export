@@ -65,7 +65,7 @@ built so far.
 | `cmd/exportd` | Service wiring, graceful shutdown; later the scheduler and a `--once` mode for Kubernetes CronJobs |
 | `internal/config` | Environment configuration with validation; secrets are never echoed |
 | `internal/httpapi` | Probes; later `/v1/exports` to trigger, inspect and re-push runs |
-| `internal/export` *(day 2)* | Report window in a zone, file naming, CSV building (no I/O) |
+| `internal/export` | Report day and window in a zone, next run time, file naming and parsing, CSV writing and reading (no I/O) |
 | `internal/postgres` *(day 3)* | Migrations, rows to export, run history |
 | `internal/blob` *(days 4–5)* | `Store` interface; `fs` and `gcs` drivers; V4 signed URLs |
 | `internal/sftp` *(day 6)* | SSH/SFTP client: key or password auth, pinned host keys, atomic upload |
@@ -271,7 +271,7 @@ spec:
 ## Roadmap
 
 - [x] **Day 1**: Scaffold: full configuration with validation, probes, slog, graceful shutdown, Docker, compose with PostgreSQL + SFTP + GCS emulator, CI
-- [ ] **Day 2**: Export domain: report window in a zone, file naming with version and sequence, CSV builder (BOM, delimiter, column order), integer money; table tests and fuzzing
+- [x] **Day 2**: Export domain: report window in a zone, file naming with version and sequence, CSV builder (BOM, delimiter, column order), integer money; table tests and fuzzing
 - [ ] **Day 3**: Schema and migrations: rows to export and `export_runs`; store with upsert, window query and run upsert by date; isolated test schemas
 - [ ] **Day 4**: Blob store: `Store` interface, `fs` driver, `gcs` driver against the emulator; content types; retries with backoff
 - [ ] **Day 5**: Signed URLs: GCS V4 signing with a service-account key, verified against a fixed key and clock; HMAC-signed links for the `fs` driver
